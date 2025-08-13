@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Asistencia Emaús Hombres</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#f5f6fa; margin:0; padding:20px; }
+    .container { max-width: 640px; margin:auto; background:#fff; padding:20px; border-radius:12px; box-shadow:0 6px 24px rgba(0,0,0,.08); }
+    h1 { margin:0 0 16px; text-align:center; }
+    label { font-weight:600; display:block; margin-top:8px; }
+    input[type="text"], input[type="date"] { width:100%; padding:10px; border:1px solid #cbd5e0; border-radius:8px; margin-top:6px; box-sizing:border-box; }
+    .actions { display:grid; gap:10px; grid-template-columns: 1fr 1fr; margin-top:14px; }
+    button { padding:12px; border:0; border-radius:8px; cursor:pointer; font-weight:700; }
+    .primary { background:#2b6cb0; color:#fff; }
+    .primary:hover { background:#234e80; }
+    .secondary { background:#4a5568; color:#fff; }
+    .secondary:hover { background:#2d3748; }
+    .ghost { background:#edf2f7; color:#1a202c; }
+    .ghost:hover { background:#e2e8f0; }
+
+    .modal { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.5); padding:20px; z-index:9999; }
+    .modal.open { display:flex; }
+    .modal-card { width:min(680px,100%); background:#000; border-radius:12px; overflow:hidden; }
+    .modal-header, .modal-footer { background:#111; color:#fff; padding:10px; display:flex; justify-content:space-between; align-items:center; }
+    video { width:100%; height:auto; display:block; background:#000; }
+    #report { margin-top:18px; overflow:auto; background:#fff; border:1px solid #e2e8f0; border-radius:10px; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { padding:10px; border-bottom:1px solid #edf2f7; text-align:left; font-size:.95rem; }
+    th { background:#f7fafc; }
+    #downloadBtn { display:none; margin-top:10px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Asistencia Emaús Hombres</h1>
+
+    <label for="docId">Escanear o ingresar ID</label>
+    <input id="docId" type="text" placeholder="Escanea o escribe la identificación" autocomplete="off" />
+
+    <div class="actions">
+      <button id="btnScan" class="primary">Escanear ID</button>
+      <button id="btnPaste" class="ghost">Pegar desde portapapeles</button>
+    </div>
+
+    <div class="actions">
+      <button id="btnRegister" class="primary">Registrar asistencia</button>
+      <button id="btnReport" class="secondary">Generar informe</button>
+    </div>
+
+    <hr style="margin:20px 0;">
+
+    <label>Informe entre fechas</label>
+    <div class="actions">
+      <input id="fromDate" type="date" />
+      <input id="toDate" type="date" />
+    </div>
+
+    <div id="report"></div>
+    <button id="downloadBtn" class="ghost">Descargar CSV</button>
+  </div>
+
+  <!-- Modal escáner -->
+  <div id="scannerModal" class="modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <strong>Escanear documento</strong>
+        <button id="closeModal" class="ghost">Cerrar</button>
+      </div>
+      <video id="video" muted playsinline></video>
+      <div class="modal-footer">
+        <button id="switchCam" class="ghost">Cambiar cámara</button>
+        <button id="stopScan" class="secondary">Detener</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ZXing lector de códigos -->
+  <script src="https://unpkg.com/@zxing/browser@latest"></script>
+  <script>
+    // 👉 TU ENDPOINT DE APPS SCRIPT
+    const API_URL = "https://script.google.com/macros/s/AKfycbzGIjh4k30WMNfNV95Yc_wmD1buVfOAmO29NMC2FqCx5XvVSpoyILtpiBhrU-imEG7t0w/exec";
+
+    // --- Escáner (ZXing) ---
+    let codeReader, currentDeviceId = null;
+    const $ = id => document.getElementById(id);
+
+    async function openScanner() {
+      $('scannerModal').classList.add('open');
+      if (!codeReader) codeReader = new ZXing.BrowserMultiFormatReader();
+
+      const devices = await ZXing.BrowserCodeReader.listVideoInputDevices();
+      if (!devices.length) { alert('No se encontró cámara'); closeScanner(); return; }
+      if (!currentDeviceId) {
+        const back = devices.find(d => /back|rear|environment/i.test(d.label));
+        currentDeviceId = (back || devices[0]).deviceId;
+      }
+      try {
+        const result = await codeReader.decodeOnceFromVideoDevice(currentDeviceId, $('video'));
+        handleDetected(result.getText());
+      } catch (err) {
+        if ($('scannerModal').classList.contains('open')) {
+          console.error(err);
+          alert('No se pudo leer el código. Intenta de nuevo o escribe el ID.');
+        }
+      }
+    }
+    function handleDetected(text){ if (text) $('docId').value = text.trim(); stopScanner(); closeScanner(); }
+    function stopScanner(){ if (codeReader) try{ codeReader.reset(); }catch{} }
+    function closeScanner(){ $('scannerModal').classList.remove('open'); }
+    async function switchCamera(){
+      const devices = await ZXing.BrowserCodeReader.listVideoInputDevices();
+      if (devices.length < 2) return;
+      const idx = devices.findIndex(d => d.deviceId === currentDeviceId);
+      currentDeviceId = devices[(idx + 1) % devices.length].deviceId;
+      stopScanner(); setTimeout(openScanner, 100);
+    }
+
+    // --- API helpers ---
+    async function postJSON(payload){
+      const res = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json' },
+        body: JSON.stringify(payload)
+      });
+      // Apps Script devuelve JSON con ContentService: lo parseamos
+      const text = await res.text();
+      try { return JSON.parse(text); } catch { return text; }
+    }
+
+    // --- Registrar asistencia ---
+    async function registrarAsistencia(){
+      const id = $('docId').value.trim();
+      if (!id) { alert('Ingresa o escanea la identificación'); return; }
+      try {
+        const data = await postJSON({ accion:'registrar', id });
+        if (data && typeof data === 'object') {
+          alert(data.mensaje || 'Asistencia registrada');
+        } else {
+          alert('Asistencia registrada');
+        }
+        $('docId').value = '';
+      } catch (e) {
+        console.error(e);
+        alert('Error al registrar. Revisa la publicación del Apps Script (Cualquiera con el enlace).');
+      }
+    }
+
+    // --- Generar informe ---
+    let ultimoInforme = [];
+    function renderTable(rows){
+      if (!rows || !rows.length) { $('report').innerHTML = '<p>No hay registros en ese rango.</p>'; $('downloadBtn').style.display='none'; return; }
+      let html = '<table><thead><tr><th>Nombre</th><th>ID</th><th>Retiro</th><th>Fecha</th></tr></thead><tbody>';
+      rows.forEach(r => {
+        const fecha = new Date(r[3]);
+        html += <tr><td>${r[0]||''}</td><td>${r[1]||''}</td><td>${r[2]||''}</td><td>${fecha.toLocaleString()}</td></tr>;
+      });
+      html += '</tbody></table>';
+      $('report').innerHTML = html;
+      $('downloadBtn').style.display = 'inline-block';
+    }
+    function descargarCSV(rows){
+      const header = ['Nombre completo','Identificación','Retiro','Fecha'];
+      const csv = [header.join(','), ...rows.map(r => [
+        "${(r[0]||'').toString().replace(/"/g,'""')}",
+        "${(r[1]||'').toString().replace(/"/g,'""')}",
+        "${(r[2]||'').toString().replace(/"/g,'""')}",
+        "${new Date(r[3]).toISOString()}"
+      ].join(','))].join('\n');
+      const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'informe_asistencia.csv';
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    }
+    async function generarInforme(){
+      const desde = $('fromDate').value;
+      const hasta = $('toDate').value;
+      if (!desde || !hasta) { alert('Selecciona fecha inicial y final'); return; }
+      try {
+        const data = await postJSON({ accion:'informe', desde, hasta });
+        ultimoInforme = Array.isArray(data) ? data : [];
+        renderTable(ultimoInforme);
+      } catch (e) {
+        console.error(e);
+        alert('Error al generar informe. Revisa la publicación del Apps Script.');
+      }
+    }
+
+    // --- Portapapeles ---
+    async function pasteFromClipboard(){
+      try { const t = await navigator.clipboard.readText(); if (t) $('docId').value = t.trim(); }
+      catch { alert('No se pudo leer el portapapeles'); }
+    }
+
+    // Listeners
+    $('btnScan').addEventListener('click', openScanner);
+    $('stopScan').addEventListener('click', stopScanner);
+    $('closeModal').addEventListener('click', () => { stopScanner(); closeScanner(); });
+    $('switchCam').addEventListener('click', switchCamera);
+    $('btnRegister').addEventListener('click', registrarAsistencia);
+    $('btnReport').addEventListener('click', generarInforme);
+    $('btnPaste').addEventListener('click', pasteFromClipboard);
+    $('docId').addEventListener('keydown', e => { if (e.key === 'Enter') registrarAsistencia(); });
+    $('downloadBtn').addEventListener('click', () => descargarCSV(ultimoInforme));
+  </script>
+</body>
+</html>
